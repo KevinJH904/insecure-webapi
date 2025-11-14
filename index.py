@@ -5,6 +5,7 @@ import hashlib
 import mysql.connector
 import base64
 import shutil
+import bcrypt  # PARCHE: Librería para hashing seguro de contraseñas
 from datetime import datetime
 from pathlib import Path
 from bottle import route, run, template, post, request, static_file
@@ -21,18 +22,23 @@ def loadDatabaseSettings(pathjs):
 
 
 def getToken():
+    # PARCHE SEGURIDAD: Usar SHA256 en lugar de SHA1 y MD5
     tiempo = datetime.now().timestamp()
     numero = random.random()
     cadena = str(tiempo) + str(numero)
     numero2 = random.random()
     cadena2 = str(numero)+str(tiempo)+str(numero2)
-    m = hashlib.sha1()
+    
+    # Usar SHA256 (más seguro que SHA1 y MD5)
+    m = hashlib.sha256()
     m.update(cadena.encode())
     P = m.hexdigest()
-    m = hashlib.md5()
-    m.update(cadena.encode())
+    
+    m = hashlib.sha256()
+    m.update(cadena2.encode())
     Q = m.hexdigest()
-    return f"{P[:20]}{Q[20:]}"
+    
+    return f"{P[:32]}{Q[32:]}"
 
 
 @post('/Registro')
@@ -55,10 +61,17 @@ def Registro():
 
     R = False
     try:
+        # PARCHE SEGURIDAD: Hashear contraseña con bcrypt antes de guardar
+        password_hash = bcrypt.hashpw(
+            request.json["password"].encode('utf-8'), 
+            bcrypt.gensalt()
+        )
+        
         with db.cursor() as cursor:
             cursor.execute(
-                # FIXEO: SQL IJECTION
-                'INSERT INTO Usuario values(null,%s,%s,md5(%s))',(request.json["uname"],request.json["email"],request.json["password"],)
+                # FIXEO: SQL INJECTION + PARCHE: bcrypt en lugar de MD5
+                'INSERT INTO Usuario values(null,%s,%s,%s)',
+                (request.json["uname"], request.json["email"], password_hash.decode('utf-8'),)
             )
             R = cursor.lastrowid
             db.commit()
@@ -88,9 +101,10 @@ def Login():
 
     try:
         with db.cursor() as cursor:
+            # PARCHE: Obtener el hash almacenado en lugar de comparar con MD5
             cursor.execute(
-                # FIXEO: SQL INJECTION
-                'SELECT id FROM Usuario WHERE uname= %s and password=md5(%s)',(request.json["uname"],request.json["password"],)
+                'SELECT id, password FROM Usuario WHERE uname = %s',
+                (request.json["uname"],)
             )
             R = cursor.fetchall()
     except Exception as e:
@@ -101,6 +115,14 @@ def Login():
     if not R:
         db.close()
         return {"R": -3}
+    
+    # PARCHE SEGURIDAD: Verificar contraseña con bcrypt
+    user_id = R[0][0]
+    stored_hash = R[0][1].encode('utf-8')
+    
+    if not bcrypt.checkpw(request.json["password"].encode('utf-8'), stored_hash):
+        db.close()
+        return {"R": -3}  # Contraseña incorrecta
 
     T = getToken()
 
@@ -112,8 +134,8 @@ def Login():
     try:
         with db.cursor() as cursor:
             #FIXEO: SQL INJECTION
-            cursor.execute('Delete from AccesoToken where id_Usuario= %s',(R[0][0],))
-            cursor.execute('insert into AccesoToken values(%s,%s,now())',(R[0][0],T,))
+            cursor.execute('Delete from AccesoToken where id_Usuario= %s',(user_id,))
+            cursor.execute('insert into AccesoToken values(%s,%s,now())',(user_id,T,))
             db.commit()
             db.close()
             return {"R": 0, "D": T}
