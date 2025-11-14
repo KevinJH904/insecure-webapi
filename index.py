@@ -104,9 +104,10 @@ def Login():
 
     T = getToken()
 
+    # PARCHE DE SEGURIDAD: Logging sanitizado sin exponer tokens ni IDs
+    # Solo se registra el evento de login sin datos sensibles
     with open("/tmp/log", "a") as log:
-        log.write(f'Delete from AccesoToken where id_Usuario = "{R[0][0]}"\n')
-        log.write(f'insert into AccesoToken values({R[0][0]},"{T}",now())\n')
+        log.write(f'[{datetime.now()}] Login exitoso - Token generado\n')
 
     try:
         with db.cursor() as cursor:
