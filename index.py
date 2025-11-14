@@ -42,6 +42,47 @@ def getToken():
     return f"{P[:32]}{Q[32:]}"
 
 
+# PARCHE SEGURIDAD: Función para validar token con expiración
+def validarToken(db, token):
+    """
+    Valida que el token exista y no haya expirado.
+    Retorna el id_Usuario si es válido, None si es inválido o expirado.
+    """
+    # Tiempo de expiración en minutos (30 minutos)
+    EXPIRACION_MINUTOS = 30
+    
+    try:
+        with db.cursor() as cursor:
+            cursor.execute(
+                'SELECT id_Usuario, fecha FROM AccesoToken WHERE token = %s',
+                (token,)
+            )
+            resultado = cursor.fetchall()
+            
+            if not resultado:
+                return None  # Token no existe
+            
+            id_usuario = resultado[0][0]
+            fecha_token = resultado[0][1]
+            
+            # Calcular diferencia de tiempo
+            tiempo_actual = datetime.now()
+            diferencia = tiempo_actual - fecha_token
+            
+            # Verificar si el token ha expirado
+            if diferencia.total_seconds() > (EXPIRACION_MINUTOS * 60):
+                # Token expirado, eliminarlo de la base de datos
+                cursor.execute('DELETE FROM AccesoToken WHERE token = %s', (token,))
+                db.commit()
+                return None
+            
+            return id_usuario
+            
+    except Exception as e:
+        print(e)
+        return None
+
+
 @post('/Registro')
 def Registro():
     dbcnf = loadDatabaseSettings('db.json')
@@ -194,16 +235,12 @@ def Imagen():
 
     TKN = request.json['token']
 
-    try:
-        with db.cursor() as cursor:
-            cursor.execute('SELECT id_Usuario FROM AccesoToken WHERE token= %s',(TKN,))
-            R = cursor.fetchall()
-    except Exception as e:
-        print(e)
+    # PARCHE SEGURIDAD: Validar token con expiración
+    id_Usuario = validarToken(db, TKN)
+    
+    if id_Usuario is None:
         db.close()
-        return {"R": -2}
-
-    id_Usuario = R[0][0]
+        return {"R": -401, "msg": "Token invalido o expirado"}
 
     with open(f'tmp/{id_Usuario}', "wb") as imagen:
         imagen.write(base64.b64decode(request.json['data'].encode()))
@@ -249,24 +286,12 @@ def Descargar():
     TKN = request.json['token']
     idImagen = request.json['id']
 
-    try:
-        with db.cursor() as cursor:
-            # FIXEO: SQL IJECTION 
-            cursor.execute('SELECT id_Usuario FROM AccesoToken WHERE token= %s',(TKN,))
-            #cursor.execute('select id_Usuario from AccesoToken where token = "'+TKN+'"');
-            R = cursor.fetchall()
-            #return {"R": -401, "msg":R}
-    except Exception as e:
-        print(e)
-        db.close()
-        return {"R": -2}
-
-    if not R:
-        db.close()
-        return {"R": -401, "msg": "Token invalido"}
+    # PARCHE SEGURIDAD: Validar token con expiración
+    id_Usuario = validarToken(db, TKN)
     
-    # Obtener el ID del usuario autenticado
-    id_Usuario = R[0][0]
+    if id_Usuario is None:
+        db.close()
+        return {"R": -401, "msg": "Token invalido o expirado"}
 
     try:
         with db.cursor() as cursor:
