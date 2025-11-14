@@ -238,12 +238,28 @@ def Descargar():
         db.close()
         return {"R": -2}
 
+    if not R:
+        db.close()
+        return {"R": -401, "msg": "Token invalido"}
+    
+    # Obtener el ID del usuario autenticado
+    id_Usuario = R[0][0]
+
     try:
         with db.cursor() as cursor:
-            # FIXEO3: Falta de validacion en las Credenciales se podia observar cualquier imagen Independietemente del Usuario 
-            # Se restructura un poco el SQL para agregar la validacion que coincida con el id_Usuario
-            cursor.execute('Select name,ruta FROM Imagen WHERE id = %s',(idImagen,))
-            R = cursor.fetchall() 
+            # PARCHE SEGURIDAD: Validar que la imagen pertenezca al usuario autenticado
+            # Agregamos id_Usuario en la condicion WHERE para autorizacion
+            cursor.execute(
+                'SELECT name, ruta FROM Imagen WHERE id = %s AND id_Usuario = %s',
+                (idImagen, id_Usuario,)
+            )
+            R = cursor.fetchall()
+            
+            # Si no hay resultados, la imagen no existe o no pertenece al usuario
+            if not R:
+                db.close()
+                return {"R": -403, "msg": "Acceso denegado: imagen no encontrada o no autorizada"}
+            
     except Exception as e:
         print(e)
         db.close()
