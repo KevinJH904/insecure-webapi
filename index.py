@@ -6,6 +6,7 @@ import mysql.connector
 import base64
 import shutil
 import bcrypt  # PARCHE: Librería para hashing seguro de contraseñas
+import re  # PARCHE: Para sanitizar nombres de archivo
 from datetime import datetime
 from pathlib import Path
 from bottle import route, run, template, post, request, static_file
@@ -161,6 +162,27 @@ def Imagen():
     if not R:
         return {"R": -1}
 
+    # PARCHE SEGURIDAD: Validar extension de archivo
+    # Lista blanca de extensiones permitidas
+    EXTENSIONES_PERMITIDAS = {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'}
+    extension = request.json['ext'].lower().strip()
+    
+    if extension not in EXTENSIONES_PERMITIDAS:
+        return {"R": -400, "msg": "Extension de archivo no permitida"}
+    
+    # PARCHE SEGURIDAD: Validar nombre de archivo
+    # Eliminar caracteres peligrosos y path traversal
+    nombre_archivo = request.json['name']
+    if not nombre_archivo or len(nombre_archivo) > 255:
+        return {"R": -400, "msg": "Nombre de archivo invalido"}
+    
+    # Detectar intentos de path traversal
+    if '..' in nombre_archivo or '/' in nombre_archivo or '\\' in nombre_archivo:
+        return {"R": -400, "msg": "Nombre de archivo contiene caracteres no permitidos"}
+    
+    # Sanitizar nombre de archivo (solo permitir alfanumericos, guiones y guiones bajos)
+    nombre_sanitizado = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', nombre_archivo)
+
     dbcnf = loadDatabaseSettings('db.json')
     db = mysql.connector.connect(
         host='mariadb_server',
@@ -188,16 +210,17 @@ def Imagen():
 
     try:
         with db.cursor() as cursor:
-            #FIXEO: SQL INJECTION
-            cursor.execute('INSERT INTO Imagen values(null,%s,"img/",%s)',(request.json["name"],id_Usuario,))
+            #FIXEO: SQL INJECTION + PARCHE: Usar nombre sanitizado
+            cursor.execute('INSERT INTO Imagen values(null,%s,"img/",%s)',(nombre_sanitizado,id_Usuario,))
             cursor.execute('SELECT max(id) as idImagen FROM Imagen where id_Usuario= %s',(id_Usuario,))
             R = cursor.fetchall()
             idImagen = R[0][0]
-            #FIXEO: SQL INJECTION
+            #FIXEO: SQL INJECTION + PARCHE: Usar extension validada
             #A = cursor.execute('update Imagen set ruta = "img/'+str(idImagen)+'.'+str(request.json['ext'])+'" where id = '+str(idImagen))
-            A = cursor.execute("UPDATE Imagen set ruta=CONCAT('img/', %s, '.', %s) where id=%s",(idImagen,request.json['ext'],idImagen,))
+            A = cursor.execute("UPDATE Imagen set ruta=CONCAT('img/', %s, '.', %s) where id=%s",(idImagen,extension,idImagen,))
             db.commit()
-            shutil.move(f'tmp/{id_Usuario}', f'img/{idImagen}.{request.json["ext"]}')
+            # PARCHE SEGURIDAD: Usar extension validada en el nombre de archivo
+            shutil.move(f'tmp/{id_Usuario}', f'img/{idImagen}.{extension}')
             return {"R": 0, "D": A}
     except Exception as e:
         print(e)
